@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#
+#   push-to-pis
+#______________
+
+function __push_to_pis__ { # wrap the entire script in a function block
+                           # in order to make use of local scoped variables
+
+##############################
+#
+#     Defaults
+#
+##############################
+
+local user
+      user='pi'
+
+local pis
+      pis='pi1 pi2 pi3 pi4'
+
+local files
+      files='.bash_logout .bash_profile .bash_profile.custom .bashrc .bashrc.custom'
+
+
+
+     local display_help
+read -d '' display_help << 'END_OF_HELP'
+bash push-to-pis [-h] [-f file1 file2...] [pi1 pi2...]
+
+By default, push-to-pis delivers the following files to the following pis:
+
+.bash_logout
+.bash_profile
+.bash_profile.custom
+.bashrc
+.bashrc.custom
+
+pi1
+pi2
+pi3
+pi4
+
+The following delivers file `file.txt` to pi `pi1`:
+
+bash push-to-pis -f file.txt pi1
+
+Goodbye.
+END_OF_HELP
+
+
+
+##############################
+#
+#     Parse arguments
+#
+##############################
+while getopts ':f:h' VAL ; do
+  [[ "$OPTARG" =~ pi[124] ]] && { TRUE_VAL="$VAL" ; VAL=':' ; } # so that option -f missing a value does not interpret the following pi as its value
+                                                                #   bash push-to-pis -f file.txt pi4   # option -f not missing a value
+                                                                #   bash push-to-pis -f          pi4   # option -f     missing a value
+  case "$VAL" in
+    ( f ) files="$OPTARG" ;;
+    ( h ) echo -e "$display_help" ; exit 0 ;;
+    ( : ) echo -e "Error: option $TRUE_VAL requires an argument.\nExiting..." ; exit 1 ;;
+    ( ? ) echo -e "Error: unknown option $OPTARG. Usage: bash push-to-pis [-f files...]\nExiting..." ; exit 1 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+# handles last component of arguments, the custom list of pis
+[[ $# -gt 0 ]] && pis="$@"
+
+
+
+##############################
+#
+#     Main script execution
+#
+##############################
+for pi in ${pis[@]} ; do
+  for file in ${files[@]} ; do
+    scp "$file" "$pi:/home/$user" &>/dev/null && echo "[ success ] delivered $file to $pi:/home/$user"
+  done
+done
+
+}
+__push_to_pis__ "$@"     # execute the script
+unset -f __push_to_pis__ # remove the "script" name from the environment's namespace

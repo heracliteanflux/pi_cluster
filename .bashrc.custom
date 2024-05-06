@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+
+############################################################
+#
+#     USER ACCOUNT MANAGEMENT
+#
+############################################################ 
+
+function verify-user {
+  local user
+
+  ##############################
+  #
+  #     Verify that the number of arguments passed to the function are 1
+  #
+  ##############################
+  [[ $# -ne 1 ]] && { echo -e 'Usage: verify <user>\nExiting...' ; return 1 ; }
+  
+  user="$1"
+
+  ##############################
+  #
+  #     Verify that the user exists
+  #
+  ##############################
+       grep "$user" /etc/passwd  &>/dev/null ; [[ $? == 0 ]] || { echo "Error: there is no entry for user $user in /etc/passwd. Exiting..."  ; return 1 ; }
+  sudo grep "$user" /etc/shadow  &>/dev/null ; [[ $? == 0 ]] || { echo "Error: there is no entry for user $user in /etc/shadow. Exiting..."  ; return 1 ; }
+       grep "$user" /etc/group   &>/dev/null ; [[ $? == 0 ]] || { echo "Error: there is no entry for user $user in /etc/group. Exiting..."   ; return 1 ; }
+  sudo grep "$user" /etc/gshadow &>/dev/null ; [[ $? == 0 ]] || { echo "Error: there is no entry for user $user in /etc/gshadow. Exiting..." ; return 1 ; }
+       grep "$user" <(ls /home)  &>/dev/null ; [[ $? == 0 ]] || { echo "Error: user $user does not have a home directory. Exiting..."        ; return 1 ; }
+
+  ##############################
+  #
+  #     Main function execution
+  #
+  ##############################
+  sudo passwd -S "$user"
+  sudo chage  -l "$user"
+  sudo grep      "$user" /etc/{passwd,group,shadow,gshadow}
+
+  return 0
+}
+
+
+
+
+
+function demo-user-management {
+  local -a users
+           users=(artemis calanthe dijkstra emhyr jaskier)
+  local -a groups
+           groups=(accounting engineering finance humanresources marketing)
+
+  ##############################
+  #
+  #     group creation
+  #
+  ##############################
+  for group in "${groups[@]}" ; do
+    sudo groupadd "$group"               ; [[ $? -eq 0 ]] && echo "[ success ] added group $group" || echo "[  error  ] could not add group $group"
+    grep "$group" /etc/group > /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] group $group has an entry in /etc/group" || echo "[  error  ] group $group does not have an entry in /etc/group"
+    
+    [[ -d "/opt/$group" ]] && echo "[   info  ] directory /opt/$group already exists" || {
+      sudo mkdir "/opt/$group"             ; [[ $? -eq 0 ]] && echo "[ success ] created directory /opt/$group"
+      sudo chmod 600 "/opt/$group"         ; [[ $? -eq 0 ]] && echo "[ success ] updated permissions for directory /opt/$group"
+      sudo chgrp -R "$group" "/opt/$group" ; [[ $? -eq 0 ]] && echo "[ success ] updated group ownership for directory /opt/$group"
+    }
+  done
+
+  ##############################
+  #
+  #     user  creation
+  #
+  ##############################
+  for user in "${users[@]}" ; do
+    sudo useradd -m "$user" -K PASS_MIN_DAYS=7 -K PASS_MAX_DAYS=365 -K PASS_WARN_AGE=28 -f 28 -e "$(date -d'+1 day' +%F)"
+                                           [[ $? -eq 0 ]] && echo "[ success ] added user $user" || echo "[  error  ] could not add user $user"
+    grep "$user" /etc/passwd > /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] user $user has an entry in /etc/passwd" || echo "[  error  ] user $user does not have an entry in /etc/passwd"
+    grep "$user" <(ls /home) > /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] user $user has a home directory" || echo "[  error  ] user $user does not have a home directory"
+
+    sudo passwd "$user" &>/dev/null <<< $'password\npassword\n'
+                                           [[ $? -eq 0 ]] && echo "[ success ] user $user has a password" || echo "[  error  ] user $user does not have a password"
+  done
+
+  ##############################
+  #
+  #     user  distribution
+  #
+  ##############################
+  sudo gpasswd -a artemis  finance   &> /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] user artemis added to group finance" || echo "[  error  ] user artemis not added to group finance"
+  sudo gpasswd -a calanthe finance   &> /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] user calanthe added to group finance" || echo "[  error  ] user calanthe not added to group finance"
+  sudo gpasswd -a calanthe marketing &> /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] user calanthe added to group marketing" || echo "[  error  ] user calanthe not added to group marketing"
+  sudo gpasswd -a dijkstra marketing &> /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] user dijkstra added to group marketing" || echo "[  error  ] user dijkstra not added to group marketing"
+
+  ##############################
+  #
+  #     
+  #
+  ##############################
+  cd /home/calanthe
+  sudo -u calanthe touch         budget.txt
+  sudo -u calanthe chgrp finance budget.txt
+  sudo -u calanthe chmod 600     budget.txt
+  cd
+
+  function cleanup-demo-user-management {
+    for group in "${groups[@]}" ; do
+      [[ -d "/opt/$group" ]] && {
+        sudo rm -r "/opt/$group" ; [[ $? -eq 0 ]] && echo "[ success ] removed directory /opt/$group" || echo "[  error  ] could not remove directory /opt/$group"
+      }
+      sudo groupdel "$group"     ; [[ $? -eq 0 ]] && echo "[ success ] removed group $group" || echo "[  error  ] could not remove group $group"
+    done
+    for user in "${users[@]}" ; do
+      sudo killall -u "$user" &> /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] terminated processes owned by user $user" || echo "[  error  ] could not terminate processes owned by user $user"
+      sudo userdel -r "$user" &> /dev/null ; [[ $? -eq 0 ]] && echo "[ success ] removed user $user" || echo "[  error  ] could not remove user $user"
+    done
+  }
+  export -f cleanup-demo-user-management
+}
+
+
+
+
+
+############################################################
+#
+#     MATH AND DATA
+#
+############################################################ 
+
+function fac {
+  (echo 1 ; seq "$1") | paste -sd\* - | bc
+}
+
+function gen-string {
+  local -i DEFAULT_LEN
+           DEFAULT_LEN=8
+
+  case $# in
+    ( 0 ) ;;
+    ( 1 ) [[ $1 =~ ^[0-9]*$ ]] && DEFAULT_LEN=$1 || { echo -e 'Error:   the argument must be an integer.\nExiting...' ; return 1 ; } ;;
+    ( * ) echo -e 'Usage:   gen-string [len]\nExiting...' ; return 1 ;;
+  esac
+
+  cat /dev/random | tr -dc 'a-zA-Z0-9' | fold -w $DEFAULT_LEN | head -n 1
+  
+  return 0
+}
+
+
+
+
+
+############################################################
+#
+#     MISCELLANEOUS
+#
+############################################################ 
+
+function cheat {
+  [[ $# -ne 1 ]] && echo 'Usage: cheat <command>' || curl "https://cheat.sh/$1"
+}
+
+
+
+
+
+############################################################
+#
+#     ALIASES
+#
+############################################################ 
+alias  bat='batcat '
+alias  cat='bat -p '
+alias cata='bat -pA '
+
+alias   cp='cp -v '
+alias mann='cheat '
+alias   mv='mv -v '
+alias path="echo $PATH | tr : '\n' "
+alias   rm='rm -iv '
+
+alias    l='ls -AhlF  --si '   #
+alias   lt='ls -AhlFt --si '   # sort by time, newest  first
+alias   ls='ls -AhlFS --si '   # sort by size, largest first
+
+alias  ll='lsd -AFl  -I .DS_Store -I .ipynb_checkpoints -I .localized -I .vscode -I __pycache__ -I desktop.ini -I \\$RECYCLE.BIN '   #
+alias llt='lsd -AFlt -I .DS_Store -I .ipynb_checkpoints -I .localized -I .vscode -I __pycache__ -I desktop.ini -I \\$RECYCLE.BIN '   # sort by time
+alias lls='lsd -AFlS -I .DS_Store -I .ipynb_checkpoints -I .localized -I .vscode -I __pycache__ -I desktop.ini -I \\$RECYCLE.BIN '   # sort by size
+alias llx='lsd -AFlX -I .DS_Store -I .ipynb_checkpoints -I .localized -I .vscode -I __pycache__ -I desktop.ini -I \\$RECYCLE.BIN '   # sort by extension
+
+alias    ...='cd ../../..'
+alias   ....='cd ../../../..'
+alias  .....='cd ../../../../..'
+alias ......='cd ../../../../../..'
+
+alias     up='cd ..'
+alias    upp='cd ../..'
+alias   uppp='cd ../../..'
+alias  upppp='cd ../../../..'
+alias uppppp='cd ../../../../..'
+
+alias findbig="find . -type f -size +$((1024))c -size -$((10*1024))c -exec ls -lh --si {} \; " # 1-10 kB
+
+function commands {
+  awk '{ CMD[$2]++; count++; } END { for (a in CMD) print CMD[a] " " CMD[a]/count*100 "% " a; }'
+}
+alias top5='history | commands | grep -v "./" | column -c3 -s" " -t | sort -nr | nl | head -n5 '

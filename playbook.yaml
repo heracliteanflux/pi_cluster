@@ -1,0 +1,427 @@
+---
+- hosts        : pis
+  gather_facts : yes
+  become       : no
+  vars:
+    user    : pi
+    vim_dir : "{{ ansible_env.HOME }}/.vim"
+    vimrc   : "{{ ansible_env.HOME }}/.vimrc"
+  tasks:
+
+
+
+##############################
+#
+#     UMASK
+#
+##############################
+
+    - name: ((   UMASK   ))   Temporarily set the umask value to the more convenient 0022...
+      ansible.builtin.shell: umask 0022
+
+
+
+##############################
+#
+#     User config files
+#
+##############################
+
+    - name: ((   USER CONFIG   ))   Ensure the existence of user files `~/{.bashrc,.bashrc.custom,.bash_profile,.bash_profile.custom,.bash_logout,.vimrc}`...
+      ansible.builtin.copy:
+        src   : "{{ item }}"
+        dest  : "{{ ansible_env.HOME }}"
+        owner : "{{ user }}"
+        group : "{{ user }}"
+        mode  : '0600'
+      loop:
+        - .bashrc
+        - .bashrc.custom
+        - .bash_logout
+        - .bash_profile
+        - .bash_profile.custom
+        - .vimrc
+
+
+
+##############################
+#
+#     Package Management
+#
+##############################
+
+    - name: ((   APT   ))   Update the cache and install packages aptitude, bat, firewalld, fzf, lsd, nftables, nginx, ripgrep, sqlite3, unbound, vim...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.apt:
+        update_cache : yes
+        state        : latest
+        pkg:
+        - aptitude
+        - bat
+        - firewalld
+        - fzf
+        - lsd
+        - nftables
+        - nginx
+        - ripgrep
+        - sqlite3
+        - unbound
+        - vim
+
+    - name: ((   APT   ))   Full upgrade...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.apt:
+        upgrade : full
+
+    - name: ((   APT   ))   Remove any unused packages and dependencies...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.apt:
+        autoclean  : yes
+        autoremove : yes
+
+    - name: ((   APT   ))   Stop and disable the firewalld service so that the firewall doesn't interfere with SSH port 2222...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.systemd_service:
+        name          : firewalld
+        state         : stopped
+        enabled       : false
+
+    - name: ((   APT   ))   Stop and disable the nginx service...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.systemd_service:
+        name          : nginx
+        state         : stopped
+        enabled       : false
+
+
+
+##############################
+#
+#     vim Configuration
+#
+##############################
+
+    - name: ((   VIM   ))   Ensure the existence of directories `~/.vim/{after/ftplugin,autoload,bundle,colors}`...
+      ansible.builtin.file:
+        state : directory
+        path  : "{{ item }}"
+        owner : "{{ user }}"
+        group : "{{ user }}"
+        mode  : '0700'
+      loop:
+        - "{{ vim_dir }}/after/ftplugin"
+        - "{{ vim_dir }}/autoload"
+        - "{{ vim_dir }}/bundle"
+        - "{{ vim_dir }}/colors"
+        - "{{ vim_dir }}/plugged"
+
+    - name: ((   VIM   ))   Ensure plugin manager `vim-plug` is downloaded to directory `~/.vim/autoload`...
+      ansible.builtin.get_url:
+        dest  : "{{ vim_dir }}/autoload/plug.vim"
+        url   : https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim
+        owner : "{{ user }}"
+        group : "{{ user }}"
+        mode  : '0600'
+
+    - name: ((   VIM   ))   Deploy vim plugins vim-airline, nerdtree, ale...
+      ansible.builtin.git:
+        dest      : "{{ vim_dir }}/plugged/{{ item.name }}"
+        repo      : "{{ item.url }}"
+        clone     : yes
+        update    : yes
+        recursive : no
+      loop:
+        - name    : vim-airline
+          url     : https://github.com/vim-airline/vim-airline
+        - name    : nerdtree
+          url     : https://github.com/preservim/nerdtree
+        - name    : ale
+          url     : https://github.com/dense-analysis/ale
+
+
+
+##############################
+#
+#     SSH Hardening
+#
+#          YOU ONLY NEED TO RUN THE FOLLOWING SET OF SSH HARDENING TASKS ONCE
+#
+##############################
+
+    - name: ((   SSH   ))   Update config file `/etc/ssh/sshd_config`...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.lineinfile:
+        path   : /etc/ssh/sshd_config
+        state  : present
+        regexp : "{{ item.regexp }}"
+        line   : "{{ item.line }}"
+      loop:
+        - regexp : '^#?AuthorizedKeysFile'
+          line   : 'AuthorizedKeysFile .ssh/authorized_keys'
+        - regexp : '^#?LogLevel'
+          line   : 'LogLevel VERBOSE'
+        - regexp : '^#?PasswordAuthentication'
+          line   : 'PasswordAuthentication no'
+        - regexp : '^#?PermitRootLogin'
+          line   : 'PermitRootLogin no'
+        - regexp : '^#?Port 22'
+          line   : 'Port 22'
+        - regexp : '^#?PubkeyAuthentication'
+          line   : 'PubkeyAuthentication yes'
+        #- regexp : '^#?StrictModes'
+        #  line   : 'StrictModes yes'
+
+    - name: ((   SSH   ))   Find ssh host key files older than 2 years...
+      register: old_ssh_host_key
+      ansible.builtin.find:
+        paths     : /etc/ssh
+        patterns  : ssh_host_*
+        file_type : file
+        age       : 2y
+
+    - name: ((   SSH   ))   Delete old host key files...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.file:
+        path  : "{{ item }}"
+        state : absent
+      loop:
+        - /etc/ssh/ssh_host_rsa_key
+        - /etc/ssh/ssh_host_rsa_key.pub
+        - /etc/ssh/ssh_host_ecdsa_key
+        - /etc/ssh/ssh_host_ecdsa_key.pub
+        - /etc/ssh/ssh_host_ed25519_key
+        - /etc/ssh/ssh_host_ed25519_key.pub
+
+    - name: ((   SSH   ))   Generate new host key files...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.command : ssh-keygen -A
+
+    - name: ((   SSH   ))   Delete generated DSA host key files...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.file:
+        path  : "{{ item }}"
+        state : absent
+      loop:
+        - /etc/ssh/ssh_host_dsa_key
+        - /etc/ssh/ssh_host_dsa_key.pub
+
+    - name: ((   SSH   ))   Update host key file permissions...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.file:
+        path : "{{ item.host_key_file }}"
+        mode : "{{ item.permission }}"
+      loop:
+        - host_key_file : /etc/ssh/ssh_host_rsa_key
+          permission    : '400'
+        - host_key_file : /etc/ssh/ssh_host_rsa_key.pub
+          permission    : '644'
+        - host_key_file : /etc/ssh/ssh_host_ecdsa_key
+          permission    : '400'
+        - host_key_file : /etc/ssh/ssh_host_ecdsa_key.pub
+          permission    : '644'
+        - host_key_file : /etc/ssh/ssh_host_ed25519_key
+          permission    : '400'
+        - host_key_file : /etc/ssh/ssh_host_ed25519_key.pub
+          permission    : '644'
+
+    - name: ((   SSH   ))   Restart sshd...
+      become        : yes
+      become_method : sudo
+      ansible.builtin.systemd_service:
+        name          : sshd
+        state         : restarted
+        enabled       : true
+        daemon_reload : true
+
+
+
+##############################
+#
+#     Unbound - Recursive DNS
+#
+#          hosts: pi1 pi2
+#
+##############################
+
+    - name: ((   UNBOUND   ))   Create file `/etc/unbound/unbound.conf.d/pi-hole.conf` with the appropriate config values...
+      when          : inventory_hostname in groups['piholes']
+      become        : yes
+      become_method : sudo
+      ansible.builtin.copy:
+        src   : unbound/pi-hole.conf
+        dest  : /etc/unbound/unbound.conf.d/pi-hole.conf
+        owner : root
+        group : root
+        mode  : '0644'
+
+    - name: ((   UNBOUND   ))   Create directory `/etc/dnsmasq.d`...
+      when          : inventory_hostname in groups['piholes']
+      become        : yes
+      become_method : sudo
+      ansible.builtin.file:
+        state : directory
+        path  : /etc/dnsmasq.d
+        owner : root
+        group : root
+        mode  : '0755'
+
+    - name: ((   UNBOUND   ))   Create file `/etc/dnsmasq.d/99-edns.conf` with the appropriate config values...
+      when          : inventory_hostname in groups['piholes']
+      become        : yes
+      become_method : sudo
+      ansible.builtin.copy:
+        src   : unbound/99-edns.conf
+        dest  : /etc/dnsmasq.d/99-edns.conf
+        owner : root
+        group : root
+        mode  : '0644'
+
+    - name: ((   UNBOUND   ))   Restart unbound...
+      when          : inventory_hostname in groups['piholes']
+      become        : yes
+      become_method : sudo
+      ansible.builtin.systemd_service:
+        name          : unbound
+        state         : restarted
+        enabled       : true
+        daemon_reload : true
+
+
+
+##############################
+#
+#     Pi-Hole - DNS Sinkhole
+#
+#     Use the following command to generate the appropriate value for WEBPASSWORD in file `setupVars.conf`
+#       echo -n 'PASSWORD' | sha256sum | awk '{printf "%s",$1}' | sha256sum | awk '{printf "%s",$1}'
+#
+##############################
+
+    - name: ((   PI-HOLE   ))   Create group `pihole`...
+      when          : inventory_hostname in groups['piholes']
+      become        : yes
+      become_method : sudo
+      ansible.builtin.group:
+        name  : pihole
+        state : present
+
+    - name: ((   PI-HOLE   ))   Create service user `pihole`.
+      when          : inventory_hostname in groups['piholes']
+      become        : yes
+      become_method : sudo
+      ansible.builtin.user:
+        name        : pihole
+        group       : pihole
+        create_home : false
+        shell       : /usr/sbin/nologin
+        state       : present
+
+    - name: ((   PI-HOLE   ))   Create directory `/etc/pihole`.
+      when          : inventory_hostname in groups['piholes']
+      become        : yes
+      become_method : sudo
+      ansible.builtin.file:
+        state : directory
+        path  : /etc/pihole
+        owner : pihole
+        group : pihole
+        mode  : '0775'
+
+    - name: ((   PI-HOLE   ))   Check to see whether file `/etc/pihole/setupVars.conf` already exists.
+      when          : inventory_hostname in groups['piholes']
+      register      : setupvars
+      ansible.builtin.stat:
+        path: /etc/pihole/setupVars.conf
+
+    - name: ((   PI-HOLE   ))   Create file `/etc/pihole/setupVars.conf` with the appropriate configuration values.
+      when          : inventory_hostname in groups['piholes'] and setupvars.stat.exists == false
+      become        : yes
+      become_method : sudo
+      ansible.builtin.copy:
+        src   : pihole/setupVars.conf
+        dest  : /etc/pihole/setupVars.conf
+        owner : root
+        group : root
+        mode  : '0644'
+
+    - name: ((   PI-HOLE   ))   Check whether pihole is already installed.
+      when          : inventory_hostname in groups['piholes']
+      register      : pihole_installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/pihole
+
+    - name: ((   PI-HOLE   ))   Install Pi-Hole in unattended mode.
+      when          : inventory_hostname in groups['piholes'] and pihole_installed.stat.exists == false
+      become        : yes
+      become_method : sudo
+      #ansible.builtin.shell: 'curl -L https://install.pi-hole.net | PIHOLE_SKIP_OS_CHECK=true bash /dev/stdin --unattended'
+      ansible.builtin.shell: 'curl -L https://install.pi-hole.net | bash /dev/stdin --unattended'
+
+
+
+##############################
+#
+#     UMASK
+#
+##############################
+
+    - name: ((   UMASK   ))   Revert the umask value back to the more secure 0077...
+      ansible.builtin.shell: umask 0077
+
+
+
+##############################
+#
+#     Pi-Rack Pro OLED Display
+#
+##############################
+
+    - name: ((   PI-RACK   ))   Clone the Pi-Rack Pro OLED Display repo to "/home/{{ user }}/SKU_RM0004..."
+      ansible.builtin.git:
+        dest      : "{{ ansible_env.HOME }}/SKU_RM0004"
+        repo      : https://github.com/UCTRONICS/SKU_RM0004
+        clone     : yes
+        update    : yes
+        recursive : no
+
+    - name: ((   PI-RACK   ))   Compile via `make`...
+      # the repo doesn't like command make -C "{{ ansible_env.HOME }}/SKU_RM0004"
+      ansible.builtin.command:
+        cmd   : make
+        chdir : "{{ ansible_env.HOME }}/SKU_RM0004"
+
+    # This task must still be tested.
+    #   https://github.com/ansible/ansible/issues/76938
+    #
+    - name: ((   PI-RACK   ))   Add an automatic startup script via `./deployment_service.sh`...
+      async         : 1
+      poll          : 0
+      ignore_errors : true
+      ansible.builtin.expect:
+        chdir     : "{{ ansible_env.HOME }}/SKU_RM0004"
+        command   : ./deployment_service.sh
+        responses :
+          "(?m)^The script needs to be restarted to take effect" : 'y'
+          "(?m)^Service already exists"                          : 'n'
+
+    - name: ((   PI-RACK   ))   Wait for the host to come back up...
+      ansible.builtin.wait_for_connection:
+        delay   : 10
+        timeout : 120
+
+    # - name: ((   PI-RACK   ))   Reboot the system for changes to take effect...
+    #   become        : yes
+    #   become_method : sudo
+    #   ansible.builtin.reboot:
+    #     msg            : "Rebooting machine in 5 seconds..."
+    #     reboot_timeout : 60
